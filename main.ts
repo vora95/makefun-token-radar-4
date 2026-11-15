@@ -4,6 +4,12 @@
 //
 //   node main.ts --input <snapshot.json>     with MAKEFUN_OUTPUT_DIR=<dir>
 //
+// The grader runs this bare — `node main.ts` with no arguments — in a fresh
+// container with the sealed snapshot mounted at /input and a writable /output.
+// So --input and MAKEFUN_OUTPUT_DIR are both optional: without --input the
+// snapshot is read from /input/snapshot.json, and without MAKEFUN_OUTPUT_DIR
+// the output goes to /output (same fallback as radar-3).
+//
 // The run is deterministic: the same snapshot bytes always produce the same
 // output bytes. Nothing here reads the clock or the network.
 import { readFileSync, writeFileSync, mkdirSync, cpSync, existsSync } from 'node:fs';
@@ -14,6 +20,12 @@ import { buildDossier } from './vendor/makefun-board.ts';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 
+// Where the grader mounts the sealed input, and where output goes by default
+// (same fallback as radar-3: the grader runs `node main.ts` bare, no flags).
+const FALLBACK_INPUT = '/input';
+const FALLBACK_OUTPUT = '/output';
+const SNAPSHOT_FILE = 'snapshot.json';
+
 function die(message: string): never {
   console.error(`main.ts: ${message}`);
   process.exit(2);
@@ -21,13 +33,20 @@ function die(message: string): never {
 
 function flagValue(argv: string[], flag: string): string | null {
   const i = argv.indexOf(flag);
-  return i >= 0 && i + 1 < argv.length ? argv[i + 1]! : null;
+  if (i >= 0 && i + 1 < argv.length) return argv[i + 1]!;
+  const joined = argv.find((a) => a.startsWith(`${flag}=`));
+  if (joined !== undefined) return joined.slice(flag.length + 1);
+  return null;
 }
 
-const input = flagValue(process.argv.slice(2), '--input');
-if (!input) die('usage: node main.ts --input <snapshot.json> (with MAKEFUN_OUTPUT_DIR set)');
-const outDir = process.env.MAKEFUN_OUTPUT_DIR;
-if (!outDir) die('MAKEFUN_OUTPUT_DIR is not set');
+/** Turn the --input value into the snapshot's path: a file, or a directory holding one. */
+function snapshotPath(raw: string): string {
+  return raw.endsWith('.json') ? raw : join(raw, SNAPSHOT_FILE);
+}
+
+const input = snapshotPath(flagValue(process.argv.slice(2), '--input') ?? FALLBACK_INPUT);
+if (!existsSync(resolve(input))) die(`no snapshot found at ${input} — pass --input <snapshot.json|directory> or mount the sealed /input`);
+const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? FALLBACK_OUTPUT;
 
 const snapshot = parseSnapshot(readFileSync(resolve(input), 'utf8'));
 const { board, radar } = buildRadar(snapshot);
